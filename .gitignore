@@ -1,0 +1,29 @@
+# ==================== BẢO MẬT - KHÔNG BAO GIỜ ĐƯỢC PUSH LÊN GITHUB ====================
+.env
+*.env
+
+# ==================== PYTHON ====================
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ==================== DỮ LIỆU / OUTPUT (không cần thiết trên GitHub, chỉ cần code) ====================
+# Lưu ý: thư mục dữ liệu thật nằm ở C:\vn_stock_agent_data (ngoài project này) nên
+# không bị ảnh hưởng, dòng dưới đây chỉ phòng khi có file test/debug tạo ra ngay
+# trong thư mục project.
+*.csv
+*.xlsx
+debug*.py
+_test_sample*
+*.log
+
+# ==================== VS CODE ====================
+.vscode/
+
+# ==================== HỆ ĐIỀU HÀNH ====================
+.DS_Store
+Thumbs.db
