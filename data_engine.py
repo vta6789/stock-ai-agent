@@ -147,7 +147,16 @@ def loc_va_chuan_bi_du_lieu_moi(df: pd.DataFrame, ma: str, da_luu: set) -> pd.Da
 
     df = df.copy()
     df["ma"] = ma
-    df["time"] = df["time"].astype(str)
+    # QUAN TRONG - DA TUNG BI BUG NAY 2 LAN: KHONG dung .astype(str) truc tiep.
+    # vnstock/pandas co the tra ve timestamp voi format khac nhau tuy nguon fetch
+    # (VD '2026-08-14 07:00:00' vs '8/14/2026 07:00' neu file CSV lo bi Excel mo/luu
+    # tu dong doi dinh dang). Neu khong chuan hoa, CUNG 1 phien giao dich se bi luu
+    # thanh 2 dong khac nhau, va khi sap xep de tim "phien moi nhat" (main.py,
+    # bot_telegram.py deu dua vao) se SAI HOAN TOAN do so sanh string, khong phai
+    # so sanh ngay thang that. Parse ve datetime that (format='mixed' de doc duoc
+    # ca 2 kieu), roi chuan hoa VE DUY NHAT 1 dang YYYY-MM-DD (bo gio vi day la
+    # du lieu theo phien/ngay, gio luon co dinh 07:00:00, khong co y nghia gi).
+    df["time"] = pd.to_datetime(df["time"], format="mixed", dayfirst=False).dt.strftime("%Y-%m-%d")
     # Loại trùng NGAY TRONG cùng 1 lần fetch (API đôi khi trả 2 dòng giống hệt
     # nhau cho phiên hiện tại khi thị trường đang mở) - giữ dòng cuối vì đó
     # thường là bản mới nhất/đầy đủ nhất.

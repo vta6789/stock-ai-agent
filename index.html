@@ -1,1 +1,34 @@
-<h1>đây là bản đề mô của file index.html thuộc nhánh demo_git</h1>
+AI agent/                          (thư mục dự án chính — đã đẩy lên GitHub)
+│
+├── 📊 PIPELINE PHÂN TÍCH
+│   ├── data_engine.py             Thu thập giá OHLCV (chạy nền 24/7)
+│   ├── backfill_lich_su.py        Tải lịch sử giá 1 lần cho watchlist
+│   ├── ta_engine.py                Chỉ báo kỹ thuật (RSI/MACD/EMA/hỗ trợ-kháng cự)
+│   ├── risk_engine.py              Entry/SL/TP, biên độ HOSE, rule T+2.5
+│   ├── fa_engine.py                Chỉ số tài chính (ROE/ROA/P-E)
+│   ├── sentiment_engine.py         Phân tích tâm lý từ tin tức qua Gemini
+│   ├── agent_brain.py              Tổng hợp quyết định BUY/SELL/HOLD
+│   └── main.py                     File trung tâm điều phối, xuất Excel
+│
+├── 🤖 TELEGRAM BOT
+│   ├── bot_telegram.py             Gửi cảnh báo tự động khi có BUY/SELL
+│   └── bot_assistant.py            ⚠️ Chưa rõ — có vẻ là bot trả lời câu hỏi
+│                                      tương tác (VD: "tóm tắt phiên ACB")
+│
+├── 🔧 CẤU HÌNH & BẢO MẬT
+│   ├── .env                        API key (Gemini, Telegram) — KHÔNG lên Git
+│   ├── .gitignore                  Danh sách file bị Git bỏ qua
+│   ├── README.md                   Mô tả dự án
+│   └── LICENSE                     ⚠️ Chưa rõ nội dung — cậu tự thêm?
+│
+└── ❓ FILE CHƯA RÕ MỤC ĐÍCH
+    ├── index.py, index.html, heading.html
+    └── (có vẻ liên quan tới bot_assistant.py hoặc 1 giao diện web nào đó)
+
+C:\vn_stock_agent_data\             (thư mục DỮ LIỆU — ngoài OneDrive, KHÔNG lên Git)
+├── lich_su_gia.csv                 Dữ liệu giá lịch sử (nguồn chính cho pipeline)
+├── phan_tich_ky_thuat.xlsx         Kết quả phân tích mới nhất (2 sheet)
+├── phan_tich_ky_thuat.csv          Bản CSV cũ hơn (trước khi đổi sang Excel)
+├── lich_su_quyet_dinh.csv          Dữ liệu test cũ (đã quyết định giữ lại tham khảo)
+├── logs/                           data_engine.log, main.log, bot_assistant.log
+└── _test_sample*, _cafef_sample*   File test/debug tạm thời
