@@ -32,8 +32,6 @@ cảnh báo BUY/SELL (qua main.py) lẫn cảnh báo chạm SL/TP (qua file này
 backfill_lich_su.py KHÔNG nằm trong file này - script chạy 1 LẦN DUY NHẤT
 khi cần backfill lịch sử ban đầu, vẫn chạy tay riêng khi cần.
 
-CHẠY (chỉ cần 1 lệnh duy nhất):
-  python bot_assistant.py
 """
 
 import os
@@ -76,7 +74,7 @@ GIO_CHAY_PIPELINE = [(11, 35), (15, 15)]
 # khi không nhập tay SL/TP cụ thể) - tính trực tiếp trên GIÁ VÀO, không phụ
 # thuộc risk_engine/phân tích kỹ thuật nên luôn tính được cho mọi trường hợp.
 NGUONG_CAT_LO_PCT = 3.5    # lỗ quá 3.5% so với giá vào -> cảnh báo cắt lỗ
-NGUONG_CHOT_LOI_PCT = 7.0  # lãi quá 7.0% so với giá vào -> cảnh báo chốt lời
+NGUONG_CHOT_LOI_PCT = 7.5  # lãi quá 7.5% so với giá vào -> cảnh báo chốt lời
 
 # Watchlist hiển thị cho /watchlist + dùng để nhận diện mã CP trong câu hỏi tự nhiên.
 # Giữ đồng bộ thủ công với WATCHLIST trong main.py / data_engine.py.
@@ -115,13 +113,12 @@ TEN_COT_CHI_TIET = {
 BIEU_TUONG_CHI_TIET = {"ky_thuat": "📈", "co_ban": "🏦", "tam_ly": "📰", "dong_tien": "💵"}
 
 # Cấu trúc file danh_muc.csv - danh mục vị thế TỰ KHAI BÁO bởi người dùng
-# (KHÔNG kết nối tài khoản chứng khoán thật, chỉ là "sổ tay" bot nhớ giúp).
 COT_DANH_MUC = [
     "ma", "gia_vao", "khoi_luong", "stop_loss", "take_profit",
     "thoi_gian_vao", "trang_thai", "da_canh_bao_sl", "da_canh_bao_tp",
 ]
 # ====================================================
-
+    
 os.makedirs(LOG_FOLDER, exist_ok=True)
 # Gắn handler TRỰC TIẾP vào logger "bot_assistant" (thay vì logging.basicConfig cấu
 # hình root logger) - vì main.py/data_engine.py cũng tự cấu hình logging khi bị
@@ -425,10 +422,9 @@ def lay_thoi_gian_phan_tich_gan_nhat() -> datetime | None:
 
 
 # ==================== DANH MỤC CÁ NHÂN (đọc/ghi CSV) ====================
-# QUAN TRỌNG: đây là danh mục do NGƯỜI DÙNG TỰ KHAI BÁO qua /muavao, KHÔNG
-# kết nối bất kỳ tài khoản chứng khoán thật nào. Bot chỉ đóng vai trò "sổ
-# tay biết tính toán" - nhớ giúp vị thế + tự canh giá, quyền quyết định mua/
-# bán thật vẫn hoàn toàn ở người dùng.
+# Danh mục do NGƯỜI DÙNG TỰ KHAI BÁO 
+# Bot chỉ đóng vai trò "sổ tay biết tính toán" - nhớ giúp vị thế + tự canh giá, quyền quyết định mua/
+
 
 def doc_danh_muc() -> pd.DataFrame:
     """Đọc file danh_muc.csv, tạo DataFrame rỗng đúng cấu trúc nếu chưa tồn tại."""
