@@ -11,11 +11,19 @@ KHÔNG chặn vòng lặp nghe Telegram):
      nếu mạng rớt (xem hàm main() ở cuối file)
   2. FETCH GIÁ TỰ ĐỘNG mỗi 30 phút     - logic mượn nguyên từ data_engine.py
   3. CHẠY PIPELINE PHÂN TÍCH TỰ ĐỘNG   - logic mượn nguyên từ main.py,
-     2 lần/ngày: 11:35 (nghỉ trưa) và 15:15 (đóng cửa)
+     2 lần/ngày: 11:35 (nghỉ trưa) và 15:15 (đóng cửa). Nếu bot khởi động
+     MUỘN và đã lỡ hết các mốc giờ trong ngày mà hôm đó CHƯA có lần phân
+     tích nào -> tự động CHẠY BÙ 1 lần duy nhất ngay sau khi khởi động
+     (xem kiem_tra_va_bu_pipeline_neu_can()).
   4. THEO DÕI DANH MỤC CÁ NHÂN         - người dùng tự khai báo vị thế qua
-     /muavao (KHÔNG kết nối tài khoản chứng khoán thật nào cả), bot tự so
-     giá mới nhất với SL/TP mỗi 30 phút (ngay sau khi fetch giá xong) và tự
-     cảnh báo qua Telegram khi chạm ngưỡng.
+     /muavao (KHÔNG kết nối tài khoản chứng khoán thật nào cả). SL/TP mặc
+     định tự tính theo % CỐ ĐỊNH trên giá vào (lỗ 3.5% -> cắt lỗ, lãi 7% ->
+     chốt lời - chỉnh ở NGUONG_CAT_LO_PCT/NGUONG_CHOT_LOI_PCT bên dưới),
+     không phụ thuộc risk_engine/phân tích kỹ thuật nên LUÔN tính được, kể
+     cả với mã đang HOLD hoặc chưa từng được phân tích. Vẫn có thể nhập tay
+     SL/TP cụ thể nếu muốn override. Bot tự so giá mới nhất với SL/TP mỗi
+     30 phút (ngay sau khi fetch giá xong) và tự cảnh báo qua Telegram khi
+     chạm ngưỡng.
 
 data_engine.py và main.py GIỮ NGUYÊN không đổi cấu trúc - chỉ đóng vai trò
 "thư viện" chứa logic. bot_telegram.py cũng giữ nguyên, dùng chung cho cả
@@ -34,7 +42,7 @@ import sys
 import logging
 import unicodedata
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import openpyxl
@@ -63,6 +71,12 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # Giờ chạy pipeline phân tích tự động (giờ Việt Nam, 24h) - chỉnh ở đây nếu muốn đổi lịch.
 GIO_CHAY_PIPELINE = [(11, 35), (15, 15)]
+
+# Ngưỡng % lãi/lỗ để TỰ TÍNH SL/TP khi khai báo vị thế qua /muavao (áp dụng
+# khi không nhập tay SL/TP cụ thể) - tính trực tiếp trên GIÁ VÀO, không phụ
+# thuộc risk_engine/phân tích kỹ thuật nên luôn tính được cho mọi trường hợp.
+NGUONG_CAT_LO_PCT = 3.5    # lỗ quá 3.5% so với giá vào -> cảnh báo cắt lỗ
+NGUONG_CHOT_LOI_PCT = 7.0  # lãi quá 7.0% so với giá vào -> cảnh báo chốt lời
 
 # Watchlist hiển thị cho /watchlist + dùng để nhận diện mã CP trong câu hỏi tự nhiên.
 # Giữ đồng bộ thủ công với WATCHLIST trong main.py / data_engine.py.
@@ -109,17 +123,26 @@ COT_DANH_MUC = [
 # ====================================================
 
 os.makedirs(LOG_FOLDER, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+# Gắn handler TRỰC TIẾP vào logger "bot_assistant" (thay vì logging.basicConfig cấu
+# hình root logger) - vì main.py/data_engine.py cũng tự cấu hình logging khi bị
+# import vào đây, và logging.basicConfig() chỉ có tác dụng ở LẦN GỌI ĐẦU TIÊN trong
+# cả tiến trình (ai import trước thì "thắng"), khiến log của bot_assistant từng bị
+# lạc sang file log của module khác (main.log). Gắn handler trực tiếp + propagate=
+# False giúp file này luôn ghi đúng vào bot_assistant.log bất kể thứ tự import.
+logger = logging.getLogger("bot_assistant")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not logger.handlers:
+    _formatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(message)s")
+    _file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    _file_handler.setFormatter(_formatter)
+    logger.addHandler(_file_handler)
+    _console_handler = logging.StreamHandler(sys.stdout)
+    _console_handler.setFormatter(_formatter)
+    logger.addHandler(_console_handler)
+
 # Giảm bớt log rác từ thư viện httpx bên trong python-telegram-bot
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logger = logging.getLogger("bot_assistant")
 
 
 # ==================== HELPER ====================
@@ -289,7 +312,10 @@ def lay_phan_tich_chi_tiet(ma: str, loai: str) -> str:
 def lay_sl_tp_tu_phan_tich(ma: str):
     """Trả về (stop_loss, take_profit) từ lần phân tích gần nhất trong Excel.
     Trả về (None, None) nếu chưa từng phân tích, hoặc tín hiệu gần nhất là
-    HOLD (HOLD không có SL/TP vì không phải điểm vào lệnh)."""
+    HOLD (HOLD không có SL/TP vì không phải điểm vào lệnh). Hiện KHÔNG còn
+    dùng làm nguồn mặc định cho /muavao nữa (đã đổi sang tính theo %,
+    xem tinh_sl_tp_theo_phan_tram) - giữ lại hàm này vì vẫn hữu ích để tham
+    khảo SL/TP theo góc nhìn kỹ thuật nếu cần dùng sau này."""
     if not os.path.exists(XLSX_PATH):
         return None, None
     try:
@@ -310,6 +336,90 @@ def lay_sl_tp_tu_phan_tich(ma: str):
         if row[idx_ma] == ma:
             return row[idx_sl], row[idx_tp]
     return None, None
+
+
+def lay_trang_thai_va_tp_ky_thuat(ma: str):
+    """Trả về (trang_thai, take_profit_ky_thuat) từ lần phân tích gần nhất -
+    dùng để tham khảo xu hướng khi đã đạt ngưỡng chốt lời % (xem
+    xay_dung_thong_diep_chot_loi). take_profit_ky_thuat là None nếu tín hiệu
+    không phải BUY/SELL (HOLD không có TP) hoặc chưa từng phân tích."""
+    if not os.path.exists(XLSX_PATH):
+        return None, None
+    try:
+        wb = openpyxl.load_workbook(XLSX_PATH, read_only=True, data_only=True)
+        ws = wb["Tổng quan"]
+    except Exception:
+        return None, None
+
+    header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    try:
+        idx_ma = header.index("Mã")
+        idx_trang_thai = header.index("Trạng thái")
+        idx_tp = header.index("Chốt lời")
+    except ValueError:
+        return None, None
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[idx_ma] == ma:
+            return row[idx_trang_thai], row[idx_tp]
+    return None, None
+
+
+def xay_dung_thong_diep_chot_loi(ma: str, gia_hien_tai: float, gia_vao: float, lai_lo_pct: float) -> str:
+    """Khi đã đạt ngưỡng chốt lời (%), tham khảo thêm xu hướng kỹ thuật gần
+    nhất để đưa lời khuyên có ngữ cảnh - thay vì chỉ báo "chạm TP" khô khan."""
+    trang_thai, tp_ky_thuat = lay_trang_thai_va_tp_ky_thuat(ma)
+
+    thong_diep = (
+        f"🎯 *{ma}* đã đạt lãi {lai_lo_pct:+.1f}%!\n"
+        f"Giá hiện tại: {gia_hien_tai} | Giá vào: {gia_vao}\n\n"
+    )
+
+    if trang_thai == "BUY" and tp_ky_thuat and tp_ky_thuat > gia_hien_tai:
+        pct_tp_ky_thuat = (tp_ky_thuat - gia_vao) / gia_vao * 100
+        thong_diep += (
+            f"📈 Phân tích kỹ thuật gần nhất VẪN cho tín hiệu MUA (xu hướng tăng tiếp).\n"
+            f"Bạn có thể:\n"
+            f"• Chốt lời ngay tại đây với lãi {lai_lo_pct:+.1f}%, hoặc\n"
+            f"• Giữ thêm - mục tiêu kỹ thuật kế tiếp khoảng *{tp_ky_thuat}* (~{pct_tp_ky_thuat:+.1f}%), "
+            f"nếu bạn chấp nhận rủi ro giá điều chỉnh lại."
+        )
+    else:
+        ten_trang_thai = trang_thai or "chưa có dữ liệu"
+        thong_diep += (
+            f"📉 Phân tích kỹ thuật gần nhất là *{ten_trang_thai}* - không còn tín hiệu tăng tiếp rõ ràng.\n"
+            f"Nên cân nhắc chốt lời ngay tại mức này."
+        )
+
+    return thong_diep           
+
+def tinh_sl_tp_theo_phan_tram(gia_vao: float):
+    """Tự tính SL/TP theo % CỐ ĐỊNH trên giá vào (NGUONG_CAT_LO_PCT /
+    NGUONG_CHOT_LOI_PCT) - không phụ thuộc phân tích kỹ thuật nên LUÔN tính
+    được cho mọi mã, mọi thời điểm. Đây là nguồn SL/TP MẶC ĐỊNH của /muavao."""
+    sl = round(gia_vao * (1 - NGUONG_CAT_LO_PCT / 100), 2)
+    tp = round(gia_vao * (1 + NGUONG_CHOT_LOI_PCT / 100), 2)
+    return sl, tp
+
+
+def lay_thoi_gian_phan_tich_gan_nhat() -> datetime | None:
+    """Đọc thời điểm phân tích của lần chạy pipeline GẦN NHẤT (dòng đầu tiên
+    trong sheet 'Tổng quan', vì main.py luôn chèn dòng mới lên đầu). Dùng để
+    biết hôm nay đã có phân tích nào chưa - phục vụ cơ chế chạy bù."""
+    if not os.path.exists(XLSX_PATH):
+        return None
+    try:
+        wb = openpyxl.load_workbook(XLSX_PATH, read_only=True, data_only=True)
+        ws = wb["Tổng quan"]
+        header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        idx_tg = header.index("Thời gian phân tích")
+        for row in ws.iter_rows(min_row=2, max_row=2, values_only=True):
+            gia_tri = row[idx_tg]
+            if gia_tri:
+                return datetime.strptime(str(gia_tri), "%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        logger.error(f"Lỗi đọc thời gian phân tích gần nhất: {e}")
+    return None
 
 # ================================================================
 
@@ -383,13 +493,14 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/watchlist - danh sách mã đang theo dõi\n\n"
         "📁 *Danh mục cá nhân (tự khai báo)*\n"
         "/muavao <MÃ> <GIÁ> <KL> [SL] [TP] - khai báo vị thế mới\n"
-        "  VD: /muavao VCB 22.5 500 (SL/TP tự lấy từ phân tích gần nhất nếu có)\n"
+        f"  VD: /muavao VCB 22.5 500 (SL/TP tự tính: lỗ {NGUONG_CAT_LO_PCT}% cắt lỗ, lãi {NGUONG_CHOT_LOI_PCT}% chốt lời)\n"
+        "  Muốn tự đặt SL/TP riêng: /muavao VCB 22.5 500 21.5 24.0\n"
         "/danhmuc - xem toàn bộ vị thế đang giữ + lãi/lỗ tạm tính\n"
         "/dachot <MÃ> - đóng vị thế đã chốt xong\n\n"
         "Hoặc chat tự nhiên, VD: \"giá HPG bao nhiêu\", \"MBB nên bán không\",\n"
         "\"kỹ thuật ACB\", \"dòng tiền FPT\" 💬\n\n"
         "⏱️ Giá tự cập nhật mỗi 30 phút (cũng tự canh SL/TP danh mục luôn).\n"
-        "Phân tích đầy đủ tự chạy lúc 11:35 & 15:15 hàng ngày.",
+        "Phân tích đầy đủ tự chạy lúc 11:35 & 15:15 hàng ngày (tự chạy bù nếu bot khởi động muộn, lỡ hết các mốc trong ngày).",
         parse_mode="Markdown",
     )
 
@@ -427,15 +538,16 @@ async def cmd_phantich(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_muavao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/muavao MÃ GIÁ KHỐI_LƯỢNG [SL] [TP] - khai báo vị thế mới vào danh mục.
-    SL/TP: nếu bạn nhập tay cả 2 thì dùng luôn giá trị đó; nếu để trống, tự
-    lấy từ lần phân tích gần nhất của mã đó (nếu có)."""
+    SL/TP: nếu bạn nhập tay cả 2 thì dùng luôn giá trị đó; nếu để trống, TỰ
+    TÍNH theo % cố định trên giá vào (NGUONG_CAT_LO_PCT/NGUONG_CHOT_LOI_PCT)
+    - luôn tính được, không phụ thuộc mã đó đã từng phân tích hay chưa."""
     await kiem_tra_va_chao_dau_ngay(update, context)
     args = context.args
     if len(args) < 3:
         await update.message.reply_text(
             "Dùng: /muavao MÃ GIÁ KHỐI_LƯỢNG [SL] [TP]\n"
             "VD: /muavao VCB 22.5 500\n"
-            "(SL/TP để trống thì tớ tự lấy từ lần phân tích gần nhất, nếu chưa có sẽ nhờ bạn nhập tay)"
+            f"(SL/TP để trống thì tớ tự tính: lỗ {NGUONG_CAT_LO_PCT}% cắt lỗ, lãi {NGUONG_CHOT_LOI_PCT}% chốt lời)"
         )
         return
 
@@ -462,19 +574,11 @@ async def cmd_muavao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ SL/TP phải là số. VD: /muavao VCB 22.5 500 21.5 24.0")
         return
 
-    if sl_nhap is not None and tp_nhap is not None:
-        sl, tp = sl_nhap, tp_nhap
-    else:
-        sl_tu_dong, tp_tu_dong = lay_sl_tp_tu_phan_tich(ma)
-        sl = sl_nhap if sl_nhap is not None else sl_tu_dong
-        tp = tp_nhap if tp_nhap is not None else tp_tu_dong
-
-    if sl is None or tp is None:
-        await update.message.reply_text(
-            f"⚠️ Chưa có SL/TP tự động cho {ma} (chưa từng phân tích, hoặc tín hiệu gần nhất là HOLD).\n"
-            f"Nhập tay đủ nhé: /muavao {ma} {gia_vao} {int(khoi_luong)} <SL> <TP>"
-        )
-        return
+    # SL/TP tự tính theo % cố định trên giá vào - LUÔN tính được, không còn
+    # trường hợp "chưa có SL/TP" như khi lấy từ phân tích kỹ thuật nữa.
+    sl_tu_dong, tp_tu_dong = tinh_sl_tp_theo_phan_tram(gia_vao)
+    sl = sl_nhap if sl_nhap is not None else sl_tu_dong
+    tp = tp_nhap if tp_nhap is not None else tp_tu_dong
 
     df = doc_danh_muc()
     dong_moi = {
@@ -489,10 +593,12 @@ async def cmd_muavao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Có lỗi khi lưu vị thế, thử lại sau nhé.")
         return
 
+    nguon_sltp = "tự tính theo %" if (sl_nhap is None or tp_nhap is None) else "bạn tự đặt"
     await update.message.reply_text(
         f"✅ Đã ghi nhận vị thế *{ma}*\n"
         f"💰 Giá vào: {gia_vao} | KL: {int(khoi_luong):,}\n"
-        f"🛑 SL: {sl} | 🎯 TP: {tp}\n\n"
+        f"🛑 SL: {sl} (-{NGUONG_CAT_LO_PCT}%) | 🎯 TP: {tp} (+{NGUONG_CHOT_LOI_PCT}%)\n"
+        f"({nguon_sltp})\n\n"
         f"Tớ sẽ tự canh giá mỗi 30 phút và cảnh báo khi chạm SL/TP nhé!",
         parse_mode="Markdown",
     )
@@ -642,10 +748,9 @@ def job_kiem_tra_danh_muc():
                 thay_doi = True
 
             if gia_hien_tai >= r["take_profit"] and not bool(r["da_canh_bao_tp"]):
+                lai_lo_pct = (gia_hien_tai - r["gia_vao"]) / r["gia_vao"] * 100 if r["gia_vao"] else 0
                 bot_telegram.gui_tin_nhan(
-                    f"🎯 *{ma}* đã CHẠM TAKE PROFIT!\n"
-                    f"Giá hiện tại: {gia_hien_tai} (TP: {r['take_profit']})\n"
-                    f"Giá vào: {r['gia_vao']} | Cân nhắc chốt lời."
+                    xay_dung_thong_diep_chot_loi(ma, gia_hien_tai, r["gia_vao"], lai_lo_pct)
                 )
                 df.loc[idx, "da_canh_bao_tp"] = True
                 thay_doi = True
@@ -677,7 +782,7 @@ def job_fetch_gia():
 def job_chay_pipeline():
     """Chạy toàn bộ pipeline phân tích (TA -> Risk -> FA -> Sentiment -> Brain)
     + lưu Excel + push cảnh báo Telegram - y hệt main.py, chỉ khác là được gọi
-    theo lịch cố định thay vì chạy tay."""
+    theo lịch cố định (hoặc chạy bù) thay vì chạy tay."""
     try:
         logger.info("⏱️ [Scheduler] Bắt đầu chạy pipeline phân tích tự động...")
         pipeline.chay_toan_bo_watchlist()
@@ -686,11 +791,41 @@ def job_chay_pipeline():
         logger.error(f"⏱️ [Scheduler] Lỗi khi chạy pipeline tự động: {e}")
 
 
+def kiem_tra_va_bu_pipeline_neu_can(scheduler: BackgroundScheduler):
+    """CƠ CHẾ CHẠY BÙ: nếu bot khởi động muộn và đã lỡ ÍT NHẤT 1 mốc giờ
+    pipeline hôm nay, MÀ hôm nay CHƯA có lần phân tích nào cả - tự động lên
+    lịch chạy bù 1 lần (không phải chạy bù cho TỪNG mốc đã lỡ, vì mỗi lần
+    chạy tốn quota Gemini đáng kể - chỉ cần đảm bảo có ít nhất 1 lần/ngày).
+    Job chạy bù được đặt trễ 15s sau khi gọi hàm này, để không chặn/xung đột
+    với job_fetch_gia cũng đang chạy ngay lúc khởi động."""
+    now = datetime.now()
+    cac_moc_da_qua = [(g, p) for g, p in GIO_CHAY_PIPELINE if (g, p) <= (now.hour, now.minute)]
+    if not cac_moc_da_qua:
+        logger.info("⏱️ Chưa qua mốc pipeline nào hôm nay, không cần chạy bù.")
+        return
+
+    lan_gan_nhat = lay_thoi_gian_phan_tich_gan_nhat()
+    if lan_gan_nhat is not None and lan_gan_nhat.date() == now.date():
+        logger.info(f"✅ Hôm nay đã có phân tích lúc {lan_gan_nhat.strftime('%H:%M')} rồi, không cần chạy bù.")
+        return
+
+    logger.warning(
+        f"⚠️ Đã lỡ {len(cac_moc_da_qua)} mốc pipeline hôm nay ({', '.join(f'{g:02d}:{p:02d}' for g, p in cac_moc_da_qua)}) "
+        f"và hôm nay chưa có phân tích nào - lên lịch chạy bù 1 lần sau 15s..."
+    )
+    scheduler.add_job(
+        job_chay_pipeline, "date",
+        run_date=datetime.now() + timedelta(seconds=15),
+        id="pipeline_chay_bu",
+    )
+
+
 def khoi_tao_scheduler() -> BackgroundScheduler:
     """Khởi tạo Market() + nạp lịch sử đã lưu 1 lần, rồi đăng ký các job nền:
     - fetch giá + kiểm tra danh mục mỗi KHOANG_CACH_CHU_KY_PHUT phút (chạy
       ngay 1 lần lúc start)
-    - chạy pipeline phân tích đúng các mốc giờ trong GIO_CHAY_PIPELINE"""
+    - chạy pipeline phân tích đúng các mốc giờ trong GIO_CHAY_PIPELINE
+    - kiểm tra và chạy bù pipeline nếu bot khởi động muộn, lỡ hết mốc trong ngày"""
     global _market, _da_luu_gia
 
     logger.info("📚 Đang khởi tạo Data Engine (nạp lịch sử giá đã lưu)...")
@@ -720,6 +855,9 @@ def khoi_tao_scheduler() -> BackgroundScheduler:
         f"⏱️ Đã bật lịch tự động: fetch giá + canh danh mục mỗi "
         f"{data_engine.KHOANG_CACH_CHU_KY_PHUT} phút, phân tích lúc {gio_hien_thi}."
     )
+
+    kiem_tra_va_bu_pipeline_neu_can(scheduler)
+
     return scheduler
 
 # ================================================================
